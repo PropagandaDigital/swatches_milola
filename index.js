@@ -1,11 +1,17 @@
 import express from 'express';
 import fetch from 'node-fetch';
 import dotenv from 'dotenv';
+import cors from 'cors';
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// Enable CORS for all origins (or restrict below for production)
+app.use(cors());
+// Optional stricter config:
+// app.use(cors({ origin: 'https://your-shop.myshopify.com' }));
 
 app.get('/swatches', async (req, res) => {
   const SHOPIFY_DOMAIN = process.env.SHOPIFY_DOMAIN;
