@@ -8,10 +8,40 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// test Enable CORS for all origins (or restrict below for production)
+// Enable CORS for all origins (adjust in production if needed)
 app.use(cors());
-// Optional stricter config:
-// app.use(cors({ origin: 'https://your-shop.myshopify.com' }));
+app.use(express.json());
+
+// Function to resolve Shopify MediaImage GID to actual image URL
+async function resolveImageUrl(SHOPIFY_DOMAIN, ADMIN_TOKEN, gid) {
+  const imageQuery = `
+    query GetImage($id: ID!) {
+      node(id: $id) {
+        ... on MediaImage {
+          image {
+            url
+          }
+        }
+      }
+    }
+  `;
+
+  const response = await fetch(`https://${SHOPIFY_DOMAIN}/admin/api/2024-07/graphql.json`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Shopify-Access-Token': ADMIN_TOKEN,
+    },
+    body: JSON.stringify({ query: imageQuery, variables: { id: gid } }),
+  });
+
+  const json = await response.json();
+  if (json.errors) {
+    console.error('Image query error:', json.errors);
+    return null;
+  }
+  return json?.data?.node?.image?.url || null;
+}
 
 app.get('/swatches', async (req, res) => {
   const SHOPIFY_DOMAIN = process.env.SHOPIFY_DOMAIN;
@@ -21,55 +51,73 @@ app.get('/swatches', async (req, res) => {
     return res.status(500).json({ error: 'Missing environment variables' });
   }
 
-  let allSwatches = [];
-  let cursor = null;
-  let hasNextPage = true;
+  try {
+    let allSwatches = [];
+    let cursor = null;
+    let hasNextPage = true;
 
-  while (hasNextPage) {
-    const query = `
-      query GetSwatches($cursor: String) {
-        metaobjects(type: "swatches", first: 250, after: $cursor) {
-          pageInfo {
-            hasNextPage
-          }
-          edges {
-            cursor
-            node {
-              id
-              handle
-              fields {
-                key
-                value
+    while (hasNextPage) {
+      const query = `
+        query GetSwatches($cursor: String) {
+          metaobjects(type: "swatches", first: 250, after: $cursor) {
+            pageInfo {
+              hasNextPage
+            }
+            edges {
+              cursor
+              node {
+                id
+                handle
+                fields {
+                  key
+                  value
+                }
               }
             }
           }
         }
+      `;
+
+      const response = await fetch(`https://${SHOPIFY_DOMAIN}/admin/api/2024-07/graphql.json`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Shopify-Access-Token': ADMIN_TOKEN,
+        },
+        body: JSON.stringify({ query, variables: { cursor } }),
+      });
+
+      const json = await response.json();
+
+      if (json.errors) {
+        return res.status(500).json({ error: json.errors });
       }
-    `;
 
-    const response = await fetch(`https://${SHOPIFY_DOMAIN}/admin/api/2024-07/graphql.json`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Shopify-Access-Token': ADMIN_TOKEN,
-      },
-      body: JSON.stringify({ query, variables: { cursor } }),
-    });
+      const data = json.data.metaobjects;
+      allSwatches.push(...data.edges.map(edge => edge.node));
 
-    const json = await response.json();
-
-    if (json.errors) {
-      return res.status(500).json({ error: json.errors });
+      hasNextPage = data.pageInfo.hasNextPage;
+      cursor = hasNextPage ? data.edges[data.edges.length - 1].cursor : null;
     }
 
-    const data = json.data.metaobjects;
-    allSwatches.push(...data.edges.map(edge => edge.node));
+    // Resolve and swap the 'main_image' field value from GID to actual image URL
+    await Promise.all(
+      allSwatches.map(async (swatch) => {
+        const imageField = swatch.fields.find(f => f.key === 'main_image');
+        if (imageField?.value?.startsWith('gid://shopify/MediaImage/')) {
+          const resolvedUrl = await resolveImageUrl(SHOPIFY_DOMAIN, ADMIN_TOKEN, imageField.value);
+          if (resolvedUrl) {
+            imageField.value = resolvedUrl; // swap the GID with actual image URL
+          }
+        }
+      })
+    );
 
-    hasNextPage = data.pageInfo.hasNextPage;
-    cursor = hasNextPage ? data.edges[data.edges.length - 1].cursor : null;
+    res.status(200).json(allSwatches);
+  } catch (error) {
+    console.error('Unexpected error:', error);
+    res.status(500).json({ error: 'Failed to fetch swatches or resolve images' });
   }
-
-  res.status(200).json(allSwatches);
 });
 
 app.listen(PORT, () => {
