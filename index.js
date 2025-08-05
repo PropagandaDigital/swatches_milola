@@ -8,7 +8,7 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Enable CORS for all origins (or restrict below for production)
+// test Enable CORS for all origins (or restrict below for production)
 app.use(cors());
 // Optional stricter config:
 // app.use(cors({ origin: 'https://your-shop.myshopify.com' }));
