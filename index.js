@@ -8,11 +8,10 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Enable CORS for all origins (adjust in production if needed)
 app.use(cors());
 app.use(express.json());
 
-// Function to resolve Shopify MediaImage GID to actual image URL
+// Helper function to resolve main image URL
 async function resolveImageUrl(SHOPIFY_DOMAIN, ADMIN_TOKEN, gid) {
   const imageQuery = `
     query GetImage($id: ID!) {
@@ -36,14 +35,16 @@ async function resolveImageUrl(SHOPIFY_DOMAIN, ADMIN_TOKEN, gid) {
   });
 
   const json = await response.json();
+
   if (json.errors) {
     console.error('Image query error:', json.errors);
     return null;
   }
+
   return json?.data?.node?.image?.url || null;
 }
 
-app.get('/swatches', async (req, res) => {
+app.get('/api/swatches', async (req, res) => {
   const SHOPIFY_DOMAIN = process.env.SHOPIFY_DOMAIN;
   const ADMIN_TOKEN = process.env.ADMIN_TOKEN;
 
@@ -90,6 +91,7 @@ app.get('/swatches', async (req, res) => {
       const json = await response.json();
 
       if (json.errors) {
+        console.error('Swatch fetch error:', json.errors);
         return res.status(500).json({ error: json.errors });
       }
 
@@ -100,20 +102,23 @@ app.get('/swatches', async (req, res) => {
       cursor = hasNextPage ? data.edges[data.edges.length - 1].cursor : null;
     }
 
-    // Resolve and swap the 'main_image' field value from GID to actual image URL
-    await Promise.all(
+    // Resolve main_image URLs
+    const swatchesWithImages = await Promise.all(
       allSwatches.map(async (swatch) => {
         const imageField = swatch.fields.find(f => f.key === 'main_image');
+        let main_image_url = null;
+
         if (imageField?.value?.startsWith('gid://shopify/MediaImage/')) {
-          const resolvedUrl = await resolveImageUrl(SHOPIFY_DOMAIN, ADMIN_TOKEN, imageField.value);
-          if (resolvedUrl) {
-            imageField.value = resolvedUrl; // swap the GID with actual image URL
-          }
+          main_image_url = await resolveImageUrl(SHOPIFY_DOMAIN, ADMIN_TOKEN, imageField.value);
+          // Replace the value with the resolved URL
+          imageField.value = main_image_url;
         }
+
+        return { ...swatch, main_image_url };
       })
     );
 
-    res.status(200).json(allSwatches);
+    res.status(200).json(swatchesWithImages);
   } catch (error) {
     console.error('Unexpected error:', error);
     res.status(500).json({ error: 'Failed to fetch swatches or resolve images' });
